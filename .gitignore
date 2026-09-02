@@ -28,3 +28,8 @@ Thumbs.db
 # Web build/dependency artifacts
 node_modules/
 .next/
+
+# Generated validation/build artifacts
+FINAL_VALIDATION_REPORT.md
+FINAL_VALIDATION_RESULTS.json
+apps/web/build-output.txt
