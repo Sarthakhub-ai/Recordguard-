@@ -8,10 +8,7 @@ from fastapi.testclient import TestClient
 
 @pytest.fixture()
 def api_client(monkeypatch):
-    # These API tests are SQLite-isolated even when the release-validation shell
-    # has PostgreSQL configured in its environment.
-    monkeypatch.setenv('RECORDGUARD_SESSION_BACKEND', 'sqlite')
-    monkeypatch.delenv('RECORDGUARD_DATABASE_URL', raising=False)
+    # Import after redirecting database path so this test cannot touch a user's DB.
     import database
     with tempfile.TemporaryDirectory() as td:
         monkeypatch.setattr(database, "DB_PATH", str(Path(td) / "test.db"))

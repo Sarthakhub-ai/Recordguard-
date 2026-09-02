@@ -6,9 +6,6 @@ from fastapi.testclient import TestClient
 
 @pytest.fixture()
 def env(monkeypatch):
-    # Force the API acceptance fixture onto isolated SQLite even during PostgreSQL validation.
-    monkeypatch.setenv('RECORDGUARD_SESSION_BACKEND', 'sqlite')
-    monkeypatch.delenv('RECORDGUARD_DATABASE_URL', raising=False)
     import database, functions
     with tempfile.TemporaryDirectory() as td:
         monkeypatch.setattr(database, 'DB_PATH', str(Path(td) / 'web.db'))

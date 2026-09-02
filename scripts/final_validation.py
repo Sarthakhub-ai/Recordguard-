@@ -6,7 +6,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 WEB = ROOT / 'apps' / 'web'
 
-def run(cmd, cwd=ROOT, timeout=180, env=None):
+def run(cmd, cwd=ROOT, timeout=180):
     try:
         p = subprocess.run(cmd, cwd=cwd, text=True, capture_output=True, timeout=timeout)
         return p.returncode == 0, (p.stdout + p.stderr).strip()[-4000:]
@@ -34,19 +34,11 @@ def main():
     results.append({'gate':'node_npm','status':'PASS' if node and npm else 'BLOCKED','detail':f'node={node or "missing"}, npm={npm or "missing"}'})
     installed = (WEB / 'node_modules').is_dir() and (WEB / 'node_modules' / 'next').exists()
     if installed:
-        npm_cmd = shutil.which('npm.cmd') or shutil.which('npm') or 'npm.cmd'
-        ok, out = run([npm_cmd,'run','build'], cwd=WEB, timeout=300)
+        ok, out = run(['npm','run','build'], cwd=WEB, timeout=300)
         results.append({'gate':'next_production_build','status':'PASS' if ok else 'FAIL','detail':out})
     else:
         results.append({'gate':'next_production_build','status':'BLOCKED','detail':'apps/web/node_modules/next is not installed'})
     audit = shutil.which('pip-audit')
-    if not audit and os.name == 'nt':
-        scripts_dir = Path(sys.executable).parent / 'Scripts'
-        user_scripts = Path.home() / 'AppData' / 'Roaming' / 'Python' / f'Python{sys.version_info.major}{sys.version_info.minor}' / 'Scripts'
-        for candidate in (scripts_dir / 'pip-audit.exe', scripts_dir / 'pip-audit.cmd', user_scripts / 'pip-audit.exe', user_scripts / 'pip-audit.cmd'):
-            if candidate.exists():
-                audit = str(candidate)
-                break
     if audit:
         ok, out = run([audit,'-r','requirements.txt','-r','requirements-web.txt'], timeout=300)
         results.append({'gate':'dependency_audit','status':'PASS' if ok else 'FAIL','detail':out})

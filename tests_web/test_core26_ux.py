@@ -20,5 +20,5 @@ def test_web_status_and_danger_semantics_present():
     assert "aria-live=\"polite\"" in page
 
 def test_desktop_intermediate_typography_level_present():
-    ui = (ROOT / "core_ui.py").read_text(encoding="utf-8")
+    ui = (ROOT / "core_ui.py").read_text()
     assert 'Section.TLabel' in ui
