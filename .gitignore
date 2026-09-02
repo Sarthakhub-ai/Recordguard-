@@ -1,0 +1,30 @@
+# Python caches / test artifacts
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Local RecordGuard data
+recordguard.db
+recordguard.db-*
+*.rgbackup
+attachments/*
+!attachments/.gitkeep
+
+# Local/editor files
+.vscode/
+.idea/
+*.log
+.DS_Store
+Thumbs.db
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+!.env.validation.example
+
+# Web build/dependency artifacts
+node_modules/
+.next/
