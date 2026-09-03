@@ -1476,8 +1476,14 @@ def create_record_shares_batch(user, patient_id, items, shared_with, expires_at=
     """Create multiple resource shares atomically. No partial share set is committed."""
     _require_user(user)
     clean_id=str(patient_id or "").strip().upper()
-    if not can_view_patient(user,clean_id):
-        raise AuthorizationRecordGuardError("You are not authorized to share this patient's record.")
+    role = _role(user)
+    own_patient = str(user.get("patient_id") or "").strip().upper() == clean_id
+    if role in {"owner", "admin", "doctor"}:
+        pass
+    elif role == "patient" and own_patient:
+        pass
+    else:
+        raise AuthorizationRecordGuardError("You are not authorized to manage sharing for this patient.")
     shared_with=str(shared_with or "").strip()
     if not shared_with: raise RecordGuardError("Recipient is required.")
     if expires_at:
@@ -1512,7 +1518,10 @@ def create_record_shares_batch(user, patient_id, items, shared_with, expires_at=
 def list_record_shares(user, patient_id=None):
     _require_user(user); pid=str(patient_id or "").strip().upper()
     if _role(user)=="patient": pid=user.get("patient_id","").strip().upper()
-    if not pid or not can_view_patient(user,pid): raise AuthorizationRecordGuardError("You are not authorized to view sharing information.")
+    role = _role(user)
+    own_patient = str(user.get("patient_id") or "").strip().upper() == pid
+    if not pid or not (role in {"owner", "admin", "doctor"} or (role == "patient" and own_patient)):
+        raise AuthorizationRecordGuardError("You are not authorized to view sharing information.")
     conn=get_connection()
     try:
         rows = [dict(r) for r in conn.execute("SELECT * FROM record_shares WHERE patient_id=? ORDER BY created_at DESC,share_id DESC",(pid,)).fetchall()]

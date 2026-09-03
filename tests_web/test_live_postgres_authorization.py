@@ -209,6 +209,60 @@ def _setup():
     )
 
 
+
+def test_live_postgres_family_grant_enforced_for_resource_reads():
+    (org, owner_id, doctor_id, patient_user_id, common_id, patient_a, patient_b, repo, Actor) = _setup()
+    from shared.domain import Role
+    owner = Actor(owner_id, Role.OWNER, org)
+    common = Actor(common_id, Role.COMMON_USER, org)
+    try:
+        with psycopg.connect(DSN) as c:
+            med = c.execute("INSERT INTO medications(medicine_name) VALUES(%s) ON CONFLICT(medicine_name) DO UPDATE SET medicine_name=EXCLUDED.medicine_name RETURNING medication_id", ("Live Family Test Medicine",)).fetchone()["medication_id"]
+            record = c.execute("""INSERT INTO medication_records(organization_id,public_medication_id,patient_id,medication_id,response_type,record_date)
+                                 VALUES(%s,%s,%s,%s,%s,now()) RETURNING record_id""", (org, "MED-LIVE-FAMILY", patient_a, med, "Taken")).fetchone()["record_id"]
+            c.execute("""INSERT INTO family_access_grants(organization_id,patient_id,grantee_user_id,resource_type,permission,status,granted_by)
+                         VALUES(%s,%s,%s,'medication','view','ACTIVE',%s)""", (org, patient_a, common_id, owner_id))
+
+        assert len(repo.list_medications(common, "RGLIVE01")) == 1
+
+        with psycopg.connect(DSN) as c:
+            c.execute("UPDATE family_access_grants SET status='REVOKED', revoked_at=now() WHERE organization_id=%s AND patient_id=%s AND grantee_user_id=%s", (org, patient_a, common_id))
+
+        with pytest.raises(PermissionError):
+            repo.list_medications(common, "RGLIVE01")
+    finally:
+        _cleanup(org)
+
+
+def test_live_postgres_family_grant_covers_ehr_and_documents():
+    (org, owner_id, doctor_id, patient_user_id, common_id, patient_a, patient_b, repo, Actor) = _setup()
+    from shared.domain import Role
+    owner = Actor(owner_id, Role.OWNER, org)
+    common = Actor(common_id, Role.COMMON_USER, org)
+    try:
+        with psycopg.connect(DSN) as c:
+            encounter = c.execute("""INSERT INTO encounters(organization_id,patient_id,visit_date,created_by)
+                                     VALUES(%s,%s,now(),%s) RETURNING encounter_id""", (org, patient_a, owner_id)).fetchone()["encounter_id"]
+            med = c.execute("INSERT INTO medications(medicine_name) VALUES(%s) ON CONFLICT(medicine_name) DO UPDATE SET medicine_name=EXCLUDED.medicine_name RETURNING medication_id", ("Live Family EHR Medicine",)).fetchone()["medication_id"]
+            c.execute("""INSERT INTO medication_records(organization_id,public_medication_id,patient_id,medication_id,response_type,record_date)
+                         VALUES(%s,%s,%s,%s,%s,now())""", (org, "MED-LIVE-FAMILY2", patient_a, med, "Taken"))
+            c.execute("""INSERT INTO family_access_grants(organization_id,patient_id,grantee_user_id,resource_type,permission,status,granted_by)
+                         VALUES(%s,%s,%s,'ehr','view','ACTIVE',%s),
+                               (%s,%s,%s,'documents','view','ACTIVE',%s)""",
+                      (org, patient_a, common_id, owner_id, org, patient_a, common_id, owner_id))
+        assert len(repo.list_encounters(common, "RGLIVE01")) == 1
+        assert repo.list_attachments(common, "RGLIVE01") == []
+        # A family-granted common user may read an empty document collection;
+        # without the grant the same call must be rejected.
+        with psycopg.connect(DSN) as c:
+            c.execute("UPDATE family_access_grants SET status='REVOKED', revoked_at=now() WHERE organization_id=%s AND patient_id=%s AND grantee_user_id=%s", (org, patient_a, common_id))
+        with pytest.raises(PermissionError):
+            repo.list_encounters(common, "RGLIVE01")
+        with pytest.raises(PermissionError):
+            repo.list_attachments(common, "RGLIVE01")
+    finally:
+        _cleanup(org)
+
 def _cleanup(org):
     with psycopg.connect(DSN) as c:
         # --------------------------------------------------------------

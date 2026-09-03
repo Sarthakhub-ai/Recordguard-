@@ -221,7 +221,7 @@ class PostgreSQLRepository:
             ).fetchone()
             if not p:
                 raise ValueError("Patient not found.")
-            _pg_require_patient_read(c, actor, p["patient_id"])
+            _pg_require_patient_read(c, actor, p["patient_id"], "medication")
             sql = """SELECT mr.*,m.medicine_name FROM medication_records mr JOIN medications m ON m.medication_id=mr.medication_id
                      WHERE mr.organization_id=%s AND mr.patient_id=%s"""
             params = [actor.organization_id, p["patient_id"]]
@@ -311,18 +311,31 @@ def _pg_require_role(actor, roles, message):
     if _pg_role(actor) not in set(roles):
         raise AuthorizationError(message)
 
-def _pg_require_patient_read(c, actor, patient_uuid):
-    """Enforce role and linked-patient scope for all PostgreSQL patient reads."""
+def _pg_is_linked_patient(c, actor, patient_uuid):
+    return bool(c.execute(
+        "SELECT 1 FROM users WHERE organization_id=%s AND user_id=%s AND patient_id=%s AND active=TRUE",
+        (actor.organization_id, actor.user_id, patient_uuid),
+    ).fetchone())
+
+def _pg_has_family_permission(c, actor, patient_uuid, resource_type, permission="view"):
+    resource = str(resource_type or "").strip().lower()
+    perm = str(permission or "view").strip().lower()
+    return bool(c.execute(
+        "SELECT 1 FROM family_access_grants WHERE organization_id=%s AND patient_id=%s "
+        "AND grantee_user_id=%s AND resource_type=%s AND permission=%s AND status='ACTIVE'",
+        (actor.organization_id, patient_uuid, actor.user_id, resource, perm),
+    ).fetchone())
+
+def _pg_require_patient_read(c, actor, patient_uuid, resource_type=None):
+    """Enforce PostgreSQL patient/resource read scope, including family grants."""
     role = _pg_role(actor)
     if role in {"owner", "admin", "doctor", "staff"}:
         return
+    if _pg_is_linked_patient(c, actor, patient_uuid):
+        return
+    if resource_type and _pg_has_family_permission(c, actor, patient_uuid, resource_type, "view"):
+        return
     if role == "patient":
-        linked = c.execute(
-            "SELECT 1 FROM users WHERE organization_id=%s AND user_id=%s AND patient_id=%s AND active=TRUE",
-            (actor.organization_id, actor.user_id, patient_uuid),
-        ).fetchone()
-        if linked:
-            return
         raise PermissionError("Patients can only access their own linked Patient profile.")
     raise PermissionError("This account is not authorized to access patient medical records.")
 
@@ -498,13 +511,21 @@ def _core15_list_family_access(self, actor, patient_id):
                                                 WHERE g.organization_id=%s AND g.patient_id=%s ORDER BY g.created_at DESC""",(actor.organization_id,p)).fetchall()]
 
 
+def _pg_require_share_management(c, actor, patient_uuid):
+    role = _pg_role(actor)
+    if role in {"owner", "admin"}:
+        return
+    if role == "doctor":
+        return
+    if role == "patient" and _pg_is_linked_patient(c, actor, patient_uuid):
+        return
+    raise PermissionError("You are not authorized to manage sharing for this patient.")
+
 def _core15_create_record_shares_batch(self, actor, patient_id, items, shared_with, expires_at=None):
     if not str(shared_with or "").strip(): raise ValueError("Recipient is required.")
     with self._connect() as c:
         p=_pg_patient_uuid(c,actor,patient_id)
-        role=_pg_role(actor)
-        if role not in {"owner","admin"} and not c.execute("SELECT 1 FROM users WHERE organization_id=%s AND user_id=%s AND patient_id=%s",(actor.organization_id,actor.user_id,p)).fetchone():
-            raise PermissionError("You are not authorized to share this patient's record.")
+        _pg_require_share_management(c, actor, p)
         expiry=None
         if expires_at:
             try:
@@ -534,9 +555,7 @@ def _core15_create_record_shares_batch(self, actor, patient_id, items, shared_wi
 def _core15_list_record_shares(self, actor, patient_id):
     with self._connect() as c:
         p=_pg_patient_uuid(c,actor,patient_id)
-        role=_pg_role(actor)
-        if role not in {"owner","admin"} and not c.execute("SELECT 1 FROM users WHERE organization_id=%s AND user_id=%s AND patient_id=%s",(actor.organization_id,actor.user_id,p)).fetchone():
-            raise PermissionError("You are not authorized to view sharing information.")
+        _pg_require_share_management(c, actor, p)
         rows=c.execute("""SELECT share_id,organization_id,patient_id,resource_type,resource_id,shared_by,shared_with,expires_at,revoked_at,created_at
                           FROM record_shares WHERE organization_id=%s AND patient_id=%s ORDER BY created_at DESC""",(actor.organization_id,p)).fetchall()
         return [dict(r) for r in rows]
@@ -546,7 +565,16 @@ def _core15_revoke_record_share(self, actor, share_id):
     with self._connect() as c:
         row=c.execute("SELECT * FROM record_shares WHERE organization_id=%s AND share_id=%s",(actor.organization_id,str(share_id))).fetchone()
         if not row: raise ValueError("Share not found.")
-        if row["shared_by"] != actor.user_id and _pg_role(actor) != "owner": raise PermissionError("Only the creator or Owner can revoke this share.")
+        role = _pg_role(actor)
+        if row["shared_by"] != actor.user_id:
+            if role == "owner":
+                pass
+            elif role == "doctor":
+                pass
+            elif role == "patient" and _pg_is_linked_patient(c, actor, row["patient_id"]):
+                pass
+            else:
+                raise PermissionError("Only the creator, an authorized Doctor/Patient, or Owner can revoke this share.")
         c.execute("UPDATE record_shares SET revoked_at=COALESCE(revoked_at,now()) WHERE organization_id=%s AND share_id=%s",(actor.organization_id,row["share_id"]))
         _pg_audit(c,actor,"SHARE_REVOKED","sharing","record_share",row["share_id"],row["patient_id"]); return True
 
@@ -590,7 +618,16 @@ def _core15_lifecycle_ehr(self, actor, resource_type, resource_id, action, passw
         transitions={"archive":("ACTIVE","ARCHIVED"),"recover":("ARCHIVED","ACTIVE"),"admin_delete":("ARCHIVED","ADMIN_DELETED"),"owner_recover":("ADMIN_DELETED","ACTIVE"),"permanent_destroy":("ADMIN_DELETED",None)}
         expected,new=transitions[action]
         if row["lifecycle_status"] != expected: raise ValueError(f"Invalid lifecycle transition from {row['lifecycle_status']}.")
-        if action=="permanent_destroy": c.execute(f"DELETE FROM {table} WHERE organization_id=%s AND {key}=%s",(actor.organization_id,row[key]))
+        if action=="permanent_destroy":
+            if typ == "document":
+                from backend.storage import LocalObjectStorage, StorageError
+                object_key = row.get("object_key")
+                if object_key:
+                    try:
+                        LocalObjectStorage().delete(object_key)
+                    except StorageError as exc:
+                        raise ValueError("Attachment content could not be permanently destroyed; database record was not removed.") from exc
+            c.execute(f"DELETE FROM {table} WHERE organization_id=%s AND {key}=%s",(actor.organization_id,row[key]))
         else: c.execute(f"UPDATE {table} SET lifecycle_status=%s WHERE organization_id=%s AND {key}=%s",(new,actor.organization_id,row[key]))
         _pg_audit(c,actor,action.upper(),"lifecycle",typ,row[key],row["patient_id"],reason_context="Core15 lifecycle transition")
         return True
@@ -605,9 +642,7 @@ def _core15_verify_actor_password(self, actor, password):
 def _core15_list_attachments(self, actor, patient_id):
     with self._connect() as c:
         p=_pg_patient_uuid(c,actor,patient_id)
-        role=_pg_role(actor)
-        allowed=role in {"owner","admin","doctor","staff"} or bool(c.execute("SELECT 1 FROM users WHERE organization_id=%s AND user_id=%s AND patient_id=%s",(actor.organization_id,actor.user_id,p)).fetchone())
-        if not allowed: raise PermissionError("You are not authorized to view this patient's documents.")
+        _pg_require_patient_read(c, actor, p, "documents")
         rows=c.execute("""SELECT attachment_id,organization_id,patient_id,encounter_id,record_id,original_name,mime_type,uploaded_by,created_at,lifecycle_status
                           FROM attachments WHERE organization_id=%s AND patient_id=%s ORDER BY created_at DESC""",(actor.organization_id,p)).fetchall()
         return [dict(r) for r in rows]
@@ -724,9 +759,7 @@ def _core19_get_attachment_path(self, actor, attachment_id):
         row=c.execute("SELECT attachment_id,patient_id,original_name,mime_type,object_key,lifecycle_status FROM attachments WHERE organization_id=%s AND attachment_id=%s",(actor.organization_id,aid)).fetchone()
         if not row: raise ValueError("Attachment not found.")
         if row["lifecycle_status"]!="ACTIVE": raise ValueError("Attachment is not available.")
-        role=_pg_role(actor)
-        if role=="patient" and not c.execute("SELECT 1 FROM users WHERE organization_id=%s AND user_id=%s AND patient_id=%s",(actor.organization_id,actor.user_id,row["patient_id"])).fetchone():
-            raise PermissionError("You are not authorized to access this attachment.")
+        _pg_require_patient_read(c, actor, row["patient_id"], "documents")
         path=LocalObjectStorage()._safe_path(row["object_key"])
         if not path.is_file(): raise ValueError("Attachment content is unavailable.")
         _pg_audit(c,actor,"ATTACHMENT_VIEWED","document","attachment",row["attachment_id"],row["patient_id"])
@@ -771,7 +804,7 @@ def _core19_create_encounter(self, actor, patient_id, visit_date, visit_type=Non
 def _core19_list_encounters(self, actor, patient_id, include_archived=False):
     with self._connect() as c:
         p = _pg_patient_uuid(c, actor, patient_id)
-        _pg_require_patient_read(c, actor, p)
+        _pg_require_patient_read(c, actor, p, "ehr")
         sql = "SELECT * FROM encounters WHERE organization_id=%s AND patient_id=%s"
         params = [actor.organization_id, p]
         if not include_archived:
@@ -805,7 +838,7 @@ def _core19_create_prescription(self, actor, patient_id, medicine_name, dosage=N
 def _core19_list_prescriptions(self, actor, patient_id, include_archived=False):
     with self._connect() as c:
         p = _pg_patient_uuid(c, actor, patient_id)
-        _pg_require_patient_read(c, actor, p)
+        _pg_require_patient_read(c, actor, p, "medication")
         sql = "SELECT * FROM prescriptions WHERE organization_id=%s AND patient_id=%s"
         params = [actor.organization_id, p]
         if not include_archived:

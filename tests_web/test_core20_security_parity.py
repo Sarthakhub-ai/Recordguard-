@@ -10,11 +10,12 @@ def test_postgres_patient_reads_have_explicit_role_and_link_scope():
     assert 'if role in {"owner", "admin", "doctor", "staff"}' in text
     assert 'if role == "patient"' in text
     assert 'raise PermissionError("This account is not authorized to access patient medical records.")' in text
-    assert '_pg_require_patient_read(c, actor, p["patient_id"])' in text
+    assert '_pg_require_patient_read(c, actor, p["patient_id"], "medication")' in text
 
 def test_postgres_clinical_reads_share_the_same_patient_scope_guard():
     text = REPO.read_text(encoding="utf-8")
-    assert text.count('_pg_require_patient_read(c, actor, p)') >= 2
+    assert '_pg_require_patient_read(c, actor, p, "ehr")' in text
+    assert '_pg_require_patient_read(c, actor, p, "medication")' in text
 
 def test_common_user_is_not_given_patient_directory_access_by_web_ui():
     text = PAGE.read_text(encoding="utf-8")
@@ -58,3 +59,34 @@ def test_typed_authorization_error_is_available_for_new_api_paths():
     assert 'class AuthorizationError(DomainError)' in domain
     assert 'except AuthorizationError as exc:' in app
     assert 'raise AuthorizationError(message)' in repo
+
+
+def test_postgres_family_grants_are_part_of_resource_read_authorization():
+    text = REPO.read_text(encoding="utf-8")
+    assert "def _pg_has_family_permission" in text
+    assert "family_access_grants" in text
+    assert "permission=%s AND status='ACTIVE'" in text
+    assert 'resource_type=None' in text
+
+def test_sharing_management_policy_is_explicit_and_backend_aligned():
+    pg = REPO.read_text(encoding="utf-8")
+    sqlite = (ROOT / "functions.py").read_text(encoding="utf-8")
+    assert "def _pg_require_share_management" in pg
+    assert 'role in {"owner", "admin"}' in pg
+    assert 'role == "doctor"' in pg
+    assert 'role == "patient"' in pg
+    assert 'role in {"owner", "admin", "doctor"}' in sqlite
+    assert 'role == "patient"' in sqlite
+    assert "manage sharing for this patient" in pg
+    assert "manage sharing for this patient" in sqlite
+
+
+def test_permanent_document_destroy_removes_object_before_db_delete():
+    repo = REPO.read_text(encoding="utf-8")
+    start = repo.index('def _core15_lifecycle_ehr')
+    end = repo.index('\ndef _core15_verify_actor_password', start)
+    block = repo[start:end]
+    assert 'if typ == "document":' in block
+    assert 'LocalObjectStorage().delete(object_key)' in block
+    assert 'c.execute(f"DELETE FROM {table}' in block
+    assert block.index('LocalObjectStorage().delete(object_key)') < block.index('c.execute(f"DELETE FROM {table}')
