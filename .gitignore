@@ -1,0 +1,64 @@
+# Python caches / test artifacts
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Local RecordGuard data
+recordguard.db
+recordguard.db-*
+*.sqlite
+*.sqlite3
+*.rgbackup
+
+# Local attachments
+attachments/*
+!attachments/.gitkeep
+
+# Local/editor files
+.vscode/
+.idea/
+*.log
+.DS_Store
+Thumbs.db
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+!.env.validation.example
+
+# Web build/dependency artifacts
+node_modules/
+.next/
+out/
+dist/
+build/
+
+# Generated validation/build artifacts
+FINAL_VALIDATION_REPORT.md
+FINAL_VALIDATION_RESULTS.json
+apps/web/build-output.txt
+
+# Temporary / OS files
+*.tmp
+*.temp
+*.swp
+*.swo
+*~
+
+# Local test/debug output
+coverage.xml
+test-results/
+playwright-report/
+test-output/
+# TypeScript build cache
+*.tsbuildinfo

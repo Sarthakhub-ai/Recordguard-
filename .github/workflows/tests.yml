@@ -1,0 +1,53 @@
+name: RecordGuard Tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: recordguard
+          POSTGRES_USER: recordguard
+          POSTGRES_PASSWORD: recordguard-ci-password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U recordguard -d recordguard"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Install dependencies
+        run: pip install -r requirements.txt -r requirements-web.txt
+      - name: Apply PostgreSQL schema
+        env:
+          RECORDGUARD_DATABASE_URL: postgresql://recordguard:recordguard-ci-password@localhost:5432/recordguard
+        run: python scripts/apply_postgres_schema.py
+      - name: Run test suite including live PostgreSQL
+        env:
+          RECORDGUARD_DATABASE_URL: postgresql://recordguard:recordguard-ci-password@localhost:5432/recordguard
+          RECORDGUARD_SESSION_BACKEND: postgres
+          RECORDGUARD_WEB_ORIGINS: http://localhost:3000
+        run: pytest -q
+      - name: Install web dependencies
+        working-directory: apps/web
+        run: npm install
+      - name: Build web application
+        working-directory: apps/web
+        env:
+          NEXT_PUBLIC_RECORDGUARD_API: http://localhost:8000
+        run: npm run build
+      - name: JavaScript dependency vulnerability scan
+        working-directory: apps/web
+        run: npm audit --audit-level=high
+      - name: Dependency vulnerability scan
+        run: pip install pip-audit && pip-audit -r requirements.txt -r requirements-web.txt

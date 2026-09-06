@@ -1,0 +1,7 @@
+# Core UI uses Python standard library Tkinter + SQLite.
+# Optional but recommended for the new Prescription Scan / Export features:
+Pillow>=10.0
+pytesseract>=0.3.10
+pypdf>=4.0
+reportlab>=4.0
+cryptography>=42.0
