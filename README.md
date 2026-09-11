@@ -1,3 +1,9 @@
+# 🚀 Live Application Links
+* **Frontend (Vercel):** https://recordguard-web.vercel.app/
+* **Backend API (Render):** https://recordguard-web.onrender.com/
+
+---
+
 # RecordGuard Core
 
 Lightweight functional-test build of the full RecordGuard project.
