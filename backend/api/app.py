@@ -131,6 +131,24 @@ app = FastAPI(
     redoc_url="/redoc",
 )
 
+origins = [
+    "https://recordguard-web.vercel.app",
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+]
+
+env_origins = os.getenv("RECORDGUARD_WEB_ORIGINS", "")
+if env_origins:
+    origins.extend([x.strip() for x in env_origins.split(",") if x.strip()])
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 
 # ---------------------------------------------------------------------------
 # Security middleware
