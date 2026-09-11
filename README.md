@@ -1,7 +1,8 @@
 # 🚀 Live Application Links
 * **Frontend (Vercel):** https://recordguard-web.vercel.app/
 * **Backend API (Render):** https://recordguard-web.onrender.com/
-
+> ⚠️ **Note on initial loading time:** Because the backend is hosted on Render's free tier, the first request may take **50–60 seconds** to wake up the server if it has been inactive. Subsequent requests will load instantly.
+> 
 ---
 
 # RecordGuard Core
